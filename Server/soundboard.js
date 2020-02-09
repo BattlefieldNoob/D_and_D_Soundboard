@@ -29,24 +29,26 @@ ambiencePreload.forEach(function(file){
     }
 });
 
-module.exports.playAmbience = function (name){
-    console.log(sfxBuffers);
-    var found=sfxBuffers.find(function(elem){ return elem.name===name;});
+module.exports.playSfx= function (name){
+    console.log(sfxBuffer);
+    var found=sfxBuffer.find(function(elem){ return elem.name===name;});
     console.log(found);
     if(found){
-        play(found.buffer,{
-            loop:true,
-            autoplay:true
-        });
+        play(found.buffer);
     }
 }
 
-module.exports.playSfx = function (name){
-    onsole.log(ambienceBuffer);
+var playingAmbience;
+
+module.exports.playAmbience = function (name){
+    if(playingAmbience!=null)
+        playingAmbience.pause();
+
+    console.log(ambienceBuffer);
     var found=ambienceBuffer.find(function(elem){ return elem.name===name;});
     console.log(found);
     if(found){
-        play(found.buffer,{
+        playingAmbience=play(found.buffer,{
             loop:true,
             autoplay:true
         });

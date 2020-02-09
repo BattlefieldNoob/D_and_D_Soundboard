@@ -1,17 +1,71 @@
-var express =require('express');
-
-const bodyParser = require('body-parser');
-
+//var express =require('express');
+//const bodyParser = require('body-parser');
 var ip = require("ip");
-
-var winston = require('winston');
-var expressWinston = require('express-winston');
-
+//var winston = require('winston');
+//var expressWinston = require('express-winston');
 var dgram=require("dgram");
-
 var server = dgram.createSocket("udp4");
-
 var soundboard = require("./soundboard");
+
+
+var mosca = require("mosca");
+var mqtt= require('mqtt');
+
+
+
+var client = mqtt.connect([{host:"mqtt://mqtt.eclipse.org"},{host:"mqtt://localhost"}]);
+//var client = mqtt.connect("mqtt://test.mosquitto.org");
+
+const getTopic='d&dSoundboard/getAssets';
+const playTopic='d&dSoundboard/playback';
+const assetsTopic='d&dSoundboard/assets';
+
+
+function initMqtt(){
+  console.log("init mqtt--------------------------------------------------");
+  client.subscribe(getTopic);
+  client.subscribe(playTopic);
+  client.on('message',function(topic,message){
+    console.log(topic);
+    var data=JSON.parse(message.toString());
+    if(data===null)
+      return;
+    console.log(data);
+
+    if(topic===getTopic){
+      var payload={sfx:soundboard.getSfx(),ambiences:soundboard.getAmbiences()};
+      console.log(JSON.stringify(payload));
+      client.publish(assetsTopic,JSON.stringify(payload));
+    }else if(topic===playTopic){
+      if(data.type && data.name){
+        if(data.type==="Ambience")
+            soundboard.playAmbience(data.name);
+        else if(data.type==="SFX")
+            soundboard.playSfx(data.name);
+        
+        return;
+      }
+    }
+  });
+}
+
+client.on('connect', function(){
+  initMqtt();
+  /*setInterval(function(){
+    client.publish(getTopic,'{"type":"sfx"}');
+    console.log('sent!!');
+  },5000);*/
+});
+
+client.on('close',function(){
+  //cannot comunicate with eclipse broker, creating mine
+  console.error("cannot comunicate with eclipse");
+  var server = new mosca.Server({port:1883});
+  server.on('ready',function(){
+    console.log('server ready on localhost');
+  });
+});
+
 
 server.bind(function(){
     server.setBroadcast(true);
@@ -32,7 +86,7 @@ function broadcast(){
     })
 }
 
-var app = express();
+/*var app = express();
 
 
 
@@ -97,4 +151,4 @@ app.use(expressWinston.errorLogger({
     )
   }));
 
-app.listen(8080,() => console.log("ready on localhost:8080"));
+app.listen(8080,() => console.log("ready on localhost:8080"));*/
