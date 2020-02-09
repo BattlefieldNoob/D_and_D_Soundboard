@@ -1,11 +1,12 @@
-import 'dart:io';
-
+import 'package:d_and_d_soundboard_app/bloc/app_event.dart';
+import 'package:d_and_d_soundboard_app/settings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
+import 'bloc/app_state.dart';
 import 'bloc/assets_bloc.dart';
+import 'ui/audio_grid_item.dart';
 
 void main() => runApp(MyApp());
 
@@ -13,128 +14,47 @@ class MyApp extends StatelessWidget {
   // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'D&D Soundboard',
-      routes: {
-        "/": (context) => BlocProvider(
-            create: (context) => AssetsBloc(),
-            child: MyHomePage(title: 'D&D Soundboard')),
-        "/settings": (context) => Settings()
-      },
-      theme: ThemeData(
-          // This is the theme of your application.
-          //
-          // Try running your application with "flutter run". You'll see the
-          // application has a blue toolbar. Then, without quitting the app, try
-          // changing the primarySwatch below to Colors.green and then invoke
-          // "hot reload" (press "r" in the console where you ran "flutter run",
-          // or simply save your changes to "hot reload" in a Flutter IDE).
-          // Notice that the counter didn't reset back to zero; the application
-          // is not restarted.
-          primarySwatch: Colors.blue,
-          buttonTheme: ButtonThemeData(textTheme: ButtonTextTheme.accent)),
-      initialRoute: "/",
-    );
+    return BlocProvider(
+        create: (context) => AssetsBloc(),
+        child: MaterialApp(
+          title: 'D&D Soundboard',
+          routes: {
+            "/": (context) => SoundBoard(title: 'D&D Soundboard'),
+            "/settings": (context) => Settings()
+          },
+          theme: ThemeData(
+              primarySwatch: Colors.blue,
+              buttonTheme: ButtonThemeData(textTheme: ButtonTextTheme.accent)),
+          initialRoute: "/",
+        ));
   }
 }
 
-class Settings extends StatelessWidget {
-  final ipRegExt =
-      new RegExp(r'^(\d?\d?\d)\.(\d?\d?\d)\.(\d?\d?\d)\.(\d?\d?\d)$');
+class SoundboardTab extends Tab {
+  final AudioType type;
 
-  @override
-  Widget build(BuildContext context) {
-    var ip = ModalRoute.of(context).settings.arguments;
-    if (ip == null) ip = "10.0.2.2";
-
-    return Scaffold(
-      appBar: AppBar(
-        actions: <Widget>[
-          Builder(builder: (context) {
-            return InkWell(
-              onTap: () async {
-                await getRaspberryIP(context);
-              },
-              child: Center(widthFactor: 2, child: Icon(Icons.search)),
-            );
-          })
-        ],
-      ),
-      body: Container(
-        padding: EdgeInsets.all(16),
-        child: Center(
-          heightFactor: 16,
-          child: Column(
-            children: <Widget>[
-              Text("RASPBERRY IP"),
-              TextFormField(
-                onFieldSubmitted: (text) async {
-                  var sp = await SharedPreferences.getInstance();
-                  sp.setString("IP", text);
-                },
-                validator: (text) {
-                  if (!ipRegExt.hasMatch(text)) {
-                    return "ip is incorrect";
-                  }
-                  return null;
-                },
-                initialValue: ip,
-                autovalidate: true,
-              )
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future getRaspberryIP(BuildContext context) async {
-    print("Start Listen");
-    var socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 6024);
-    socket.listen((event) async {
-      print(event);
-      if (event == RawSocketEvent.read) {
-        var mess = socket.receive();
-        var sp = await SharedPreferences.getInstance();
-        var ip = String.fromCharCodes(mess.data);
-        sp.setString("IP", ip);
-        socket.close();
-        Scaffold.of(context).showSnackBar(SnackBar(
-            duration: Duration(seconds: 2), content: Text("IP FOUND!")));
-        await Future.delayed(Duration(seconds: 2));
-        Navigator.of(context).pop(ip);
-      }
-    });
-  }
+  SoundboardTab(this.type) : super(text: type.toString().split('.')[1]);
 }
 
-class MyHomePage extends StatefulWidget {
-  MyHomePage({Key key, this.title}) : super(key: key);
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
+class SoundBoard extends StatefulWidget {
+  SoundBoard({Key key, this.title}) : super(key: key);
 
   final String title;
 
   @override
-  _MyHomePageState createState() => _MyHomePageState();
+  _SoundBoardState createState() => _SoundBoardState();
 }
 
-class _MyHomePageState extends State<MyHomePage>
+class _SoundBoardState extends State<SoundBoard>
     with SingleTickerProviderStateMixin {
   AssetsBloc bloc;
 
-  String ip;
-
   TabController _tabController;
 
-  final tabs = <Tab>[Tab(text: "Ambience"), Tab(text: "Sfx")];
+  final tabs = <SoundboardTab>[
+    SoundboardTab(AudioType.Ambience),
+    SoundboardTab(AudioType.SFX)
+  ];
 
   @override
   void initState() {
@@ -142,11 +62,6 @@ class _MyHomePageState extends State<MyHomePage>
     _tabController = TabController(length: 2, vsync: this);
 
     bloc = BlocProvider.of<AssetsBloc>(context);
-    bloc.add(GetAssetsEvent());
-
-    SharedPreferences.getInstance().then((sp) {
-      ip = sp.getString("IP");
-    });
   }
 
   @override
@@ -167,13 +82,7 @@ class _MyHomePageState extends State<MyHomePage>
         actions: <Widget>[
           GestureDetector(
             onTap: () {
-              Navigator.pushNamed(context, "/settings", arguments: ip)
-                  .then((_) {
-                SharedPreferences.getInstance().then((sp) {
-                  ip = sp.getString("IP");
-                  bloc.add(GetAssetsEvent());
-                });
-              });
+              Navigator.pushNamed(context, "/settings");
             },
             child: Center(widthFactor: 2, child: Icon(Icons.settings)),
           )
@@ -184,17 +93,15 @@ class _MyHomePageState extends State<MyHomePage>
           // in the middle of the parent.
           child: TabBarView(
               controller: _tabController,
-              children: tabs.map((Tab tab) {
-                return BlocBuilder<AssetsBloc, AssetsState>(
+              children: tabs.map((SoundboardTab tab) {
+                return BlocBuilder<AssetsBloc, AppState>(
                     condition: (prevState, state) {
                   return !(prevState == state);
                 }, builder: (context, state) {
-                  if (state is EmptyState) {
-                    return Center(child: Text("No assets"));
-                  } else {
+                  if (state is Ready) {
                     var elements = state.sfx;
                     var playingIndex = -1;
-                    if (tab.text == "Ambience") {
+                    if (tab.type == AudioType.Ambience) {
                       elements = state.ambiences;
                       playingIndex = state.ambienceInPlayIndex;
                     }
@@ -207,20 +114,23 @@ class _MyHomePageState extends State<MyHomePage>
                         SizedBox(
                           height: 8,
                         ),
-                        getTabList(elements, playingIndex),
+                        getTabList(elements, playingIndex,
+                            tab.type == AudioType.Ambience),
                       ],
                     );
+                  } else {
+                    return Center(child: Text("No assets"));
                   }
                 });
               }).toList())), // This trailing comma makes auto-formatting nicer for build methods.
       floatingActionButton: FloatingActionButton(
-          onPressed: () => bloc.add(GetAssetsEvent()),
+          onPressed: () => bloc.add(AppEvent.getAsset()),
           child: Icon(Icons.refresh)),
     );
   }
 
-  Widget getTabTitle(Tab tab) {
-    if (tab.text == "Ambience") {
+  Widget getTabTitle(SoundboardTab tab) {
+    if (tab.type == AudioType.Ambience) {
       return Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: <Widget>[
@@ -229,7 +139,8 @@ class _MyHomePageState extends State<MyHomePage>
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             FlatButton(
-                child: Text("Stop All"), onPressed: () => bloc.add(StopEvent()))
+                child: Text("Stop All"),
+                onPressed: () => bloc.add(AppEvent.stop()))
           ]);
     } else {
       return Padding(
@@ -241,55 +152,17 @@ class _MyHomePageState extends State<MyHomePage>
     }
   }
 
-  Widget getTabList(List<dynamic> elements, int playingIndex) {
+  Widget getTabList(List<dynamic> elements, int playingIndex, bool isAmbience) {
     return Expanded(
         child: GridView.builder(
             itemBuilder: (context, int index) {
-              return AmbienceListItem(
-                  bloc, elements[index], index == playingIndex);
+              return isAmbience
+                  ? AudioGridItem.ambience(
+                      bloc, elements[index], index == playingIndex)
+                  : AudioGridItem.sfx(bloc, elements[index]);
             },
             gridDelegate:
                 SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3),
             itemCount: elements.length));
-  }
-}
-
-class AmbienceListItem extends StatelessWidget {
-  final String name;
-  final type = "ambience";
-  final AssetsBloc bloc;
-  final regex = new RegExp(r"(\.+)");
-  final bool inPlay;
-  AmbienceListItem(this.bloc, this.name, this.inPlay);
-
-  @override
-  Widget build(BuildContext context) {
-    return AspectRatio(
-        aspectRatio: 6,
-        child: Card(
-            color: inPlay ? Colors.lightBlueAccent : Colors.white,
-            margin: EdgeInsets.all(8),
-            child: InkWell(
-                onTap: () => bloc.add(PlayEvent(type, name)),
-                child: Center(child: Text(name.split(regex)[0])))));
-  }
-}
-
-class SfxListItem extends StatelessWidget {
-  final String name;
-  final type = "sfx";
-  final AssetsBloc bloc;
-  final regex = new RegExp(r"(\.+)");
-  SfxListItem(this.bloc, this.name);
-
-  @override
-  Widget build(BuildContext context) {
-    return AspectRatio(
-        aspectRatio: 6,
-        child: Card(
-            margin: EdgeInsets.all(8),
-            child: InkWell(
-                onTap: () => bloc.add(PlayEvent(type, name)),
-                child: Center(child: Text(name.split(regex)[0])))));
   }
 }

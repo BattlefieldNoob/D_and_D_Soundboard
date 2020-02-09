@@ -1,104 +1,132 @@
 import 'dart:convert';
 
 import 'package:bloc/bloc.dart';
-import 'package:http/http.dart' as http;
+import 'package:mqtt_client/mqtt_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-class Event {}
+import 'app_event.dart';
+import 'app_state.dart';
 
-class PlayBackEvent extends Event {
-  var type;
-  var name;
+enum AudioType { SFX, Ambience }
 
-  PlayBackEvent(this.type, this.name);
-}
+class AssetsBloc extends Bloc<AppEvent, AppState> {
+  final assetsTopic = "d&dSoundboard/assets";
+  final getAssetsTopic = 'd&dSoundboard/getAssets';
+  final playbackTopic = 'd&dSoundboard/playback';
 
-class PlayEvent extends PlayBackEvent {
-  PlayEvent(type, name) : super(type, name);
-}
+  MqttClient client;
 
-class StopEvent extends PlayBackEvent {
-  StopEvent() : super("ambience", "none");
-}
-
-class GetAssetsEvent extends Event {
-  GetAssetsEvent();
-}
-
-class AssetsState {
-  var sfx = [];
-  var ambiences = [];
-  var ambienceInPlayIndex = -1;
-
-  static copyFrom(AssetsState state) {
-    return AssetsState()
-      ..ambienceInPlayIndex = state.ambienceInPlayIndex
-      ..ambiences = state.ambiences
-      ..sfx = state.sfx;
+  AssetsBloc() {
+    initState();
   }
-}
 
-class EmptyState extends AssetsState {}
-
-class ReadyState extends AssetsState {}
-
-class AssetsBloc extends Bloc<Event, AssetsState> {
-  AssetsState current;
-
-  @override
-  AssetsState get initialState => EmptyState();
-
-  @override
-  Stream<AssetsState> mapEventToState(Event event) async* {
+  void initState() async {
     var sp = await SharedPreferences.getInstance();
     var ip = sp.getString("IP");
-    if (ip == null)
-      yield EmptyState();
-    else {
-      print(event);
-      if (event is PlayEvent) {
-        var ambienceInPlay = current.ambiences.indexOf(event.name);
-        if (current.ambienceInPlayIndex == ambienceInPlay) {
-          yield current;
-        } else {
-          print("play" + event.name);
-          await http.post("http://$ip:8080/play",
-              body: {"type": event.type, "name": event.name});
+    if (ip != null) add(AppEvent.setIP(ip));
+  }
 
-          current.ambienceInPlayIndex = ambienceInPlay;
-          current = AssetsState.copyFrom(current);
-          yield current;
+  Future initMQTT() async {
+    try {
+      client.port = 1883;
+      client.logging(on: true);
+      client.keepAlivePeriod = 30;
+
+      final MqttConnectMessage connMess = MqttConnectMessage()
+          .withClientIdentifier('D&D')
+          .startClean() // Non persistent session for testing
+          .keepAliveFor(30)
+          .withWillQos(MqttQos.atMostOnce);
+
+      client.connectionMessage = connMess;
+      var status = await client.connect();
+      print(status);
+      client.subscribe(assetsTopic, MqttQos.atLeastOnce);
+      client.published.listen((data) {
+        print(String.fromCharCodes(data.payload.message));
+      });
+      client.published
+          .where((mess) => mess.variableHeader.topicName == assetsTopic)
+          .map((mess) => jsonDecode(String.fromCharCodes(mess.payload.message)))
+          .listen((data) =>
+              add(AppEvent.updateAsset(data["sfx"], data["ambiences"])));
+      add(AppEvent.getAsset());
+    } catch (e) {
+      print(e);
+    }
+  }
+
+  @override
+  AppState get initialState => AppState.empty();
+
+  @override
+  Stream<AppState> mapEventToState(AppEvent event) async* {
+    AppState current = state;
+
+    if (current is Connecting) {
+      if (event is Get) {
+        sendToServer(getAssetsTopic, {});
+        yield current;
+      } else if (event is Update) {
+        yield AppState.ready(
+            ip: current.ip,
+            ambienceInPlayIndex: -1,
+            sfx: event.sfx,
+            ambiences: event.ambiences);
+      }
+    }
+
+    if (current is Ready) {
+      if (event is Get) {
+        sendToServer(getAssetsTopic, {});
+        yield current;
+      } else if (event is Update) {
+        yield AppState.ready(
+            ip: current.ip,
+            ambienceInPlayIndex: -1,
+            sfx: event.sfx,
+            ambiences: event.ambiences);
+      } else if (event is Play) {
+        if (event.type == AudioType.Ambience) {
+          var ambienceInPlay = current.ambiences.indexOf(event.name);
+          if (current.ambienceInPlayIndex == ambienceInPlay) {
+            yield current;
+          } else {
+            yield current.copyWith(ambienceInPlayIndex: ambienceInPlay);
+          }
         }
-      } else if (event is StopEvent) {
+        print("play" + event.name);
+        var data = {
+          "type": event.type.toString().split('.')[1],
+          "name": event.name
+        };
+        sendToServer(playbackTopic, data);
+      } else if (event is Stop) {
         if (current.ambienceInPlayIndex == -1)
           yield current;
         else {
-          await http.post("http://$ip:8080/play",
-              body: {"type": event.type, "name": "none"});
-          current.ambienceInPlayIndex = -1;
-
-          current = AssetsState.copyFrom(current);
-          yield current;
+          var data = {"type": "Ambience", "name": "none"};
+          sendToServer(playbackTopic, data);
+          yield current.copyWith(ambienceInPlayIndex: -1);
         }
-      } else if (event is GetAssetsEvent) {
-        print(event);
-        try {
-          var ambiences = http
-              .get("http://$ip:8080/ambiences")
-              .then((res) => {"ambiences": jsonDecode(res.body)});
-          var sfx = http
-              .get("http://$ip:8080/sfx")
-              .then((res) => {"sfx": jsonDecode(res.body)});
-          var response = await Future.wait([ambiences, sfx]);
-          current = ReadyState()
-            ..sfx = response[1]["sfx"] as List<dynamic>
-            ..ambiences = response[0]["ambiences"] as List<dynamic>;
-          yield current;
-        } catch (e) {
-          print(e);
-        }
-      } else
-        yield EmptyState();
+      }
     }
+
+    if (event is SetIP) {
+      if (client != null) client.disconnect();
+      //client = MqttClient("test.mosquitto.org", "");
+      client = MqttClient(event.ip, "");
+      await initMQTT();
+      yield AppState.connecting(event.ip);
+    }
+  }
+
+  void sendToServer(String topic, Map<String, dynamic> data) {
+    if (client == null ||
+        client.connectionStatus.state != MqttConnectionState.connected) return;
+
+    var payload = MqttClientPayloadBuilder();
+    payload.addString(jsonEncode(data));
+    client.publishMessage(topic, MqttQos.atLeastOnce, payload.payload);
   }
 }
